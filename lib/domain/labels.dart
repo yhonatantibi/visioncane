@@ -1,0 +1,25 @@
+const _hebrewLabels = <String, String>{
+  'person': 'אדם',
+  'bicycle': 'אופניים',
+  'car': 'מכונית',
+  'motorcycle': 'אופנוע',
+  'bus': 'אוטובוס',
+  'truck': 'משאית',
+  'traffic light': 'רמזור',
+  'stop sign': 'תמרור עצור',
+  'bench': 'ספסל',
+  'chair': 'כיסא',
+  'dog': 'כלב',
+  'cat': 'חתול',
+  'backpack': 'תיק גב',
+  'umbrella': 'מטרייה',
+  'suitcase': 'מזוודה',
+  'potted plant': 'עציץ',
+  'bottle': 'בקבוק',
+  'dining table': 'שולחן',
+  'couch': 'ספה',
+  'tv': 'מסך',
+  'cell phone': 'טלפון',
+};
+
+String displayLabel(String label) => _hebrewLabels[label] ?? label;

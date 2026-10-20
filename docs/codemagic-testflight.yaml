@@ -1,0 +1,56 @@
+# OPTIONAL TEMPLATE. This is not the active root codemagic.yaml.
+# Use only after verify-mobile passes and Apple signing is configured.
+# Replace the bundle ID and integration name with your real registered values.
+workflows:
+  ios-testflight:
+    name: VisionCane - signed iOS beta
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: visioncane_apple
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: app.visioncane.replace-me
+      vars:
+        APP_BUNDLE_ID: app.visioncane.replace-me
+    scripts:
+      - name: Validate account configuration
+        script: |
+          if [ "$APP_BUNDLE_ID" = 'app.visioncane.replace-me' ]; then
+            echo 'Register your bundle ID and update both values before running.'
+            exit 1
+          fi
+      - name: Generate platform files and install packages
+        script: |
+          flutter config --no-enable-swift-package-manager
+          node tool/bootstrap.mjs
+      - name: Analyze and test
+        script: |
+          set -e
+          node --test tool/native_config.test.mjs
+          flutter analyze
+          flutter test
+      - name: Install pods and apply signing profiles
+        script: |
+          set -e
+          cd ios
+          pod install --repo-update
+          cd ..
+          xcode-project use-profiles
+      - name: Build signed beta
+        script: |
+          flutter build ipa --release \
+            --build-number="$BUILD_NUMBER" \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - pubspec.lock
+      - ios/Podfile.lock
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true

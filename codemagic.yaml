@@ -1,0 +1,39 @@
+# Start this workflow manually after importing the repository into Codemagic.
+# It needs no Apple signing credentials. Its unsigned iOS output is NOT installable.
+workflows:
+  verify-mobile:
+    name: VisionCane - verify Android and unsigned iOS
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Check native configuration tools
+        script: node --test tool/native_config.test.mjs
+      - name: Generate matching platform projects
+        script: |
+          flutter config --no-enable-swift-package-manager
+          node tool/bootstrap.mjs
+      - name: Analyze and test Flutter code
+        script: |
+          set -e
+          flutter analyze
+          flutter test --reporter expanded
+      - name: Build Android test APK
+        script: flutter build apk --debug
+      - name: Resolve iOS dependencies
+        script: |
+          cd ios
+          pod install --repo-update
+      - name: Compile iOS without signing
+        script: |
+          set -e
+          flutter build ios --release --no-codesign
+          ditto -c -k --sequesterRsrc --keepParent build/ios/iphoneos/Runner.app build/ios/iphoneos/VisionCane-unsigned.zip
+    artifacts:
+      - build/app/outputs/flutter-apk/app-debug.apk
+      - pubspec.lock
+      - ios/Podfile.lock
+      - build/ios/iphoneos/VisionCane-unsigned.zip
