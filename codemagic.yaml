@@ -21,8 +21,8 @@ workflows:
           set -e
           flutter analyze
           flutter test --reporter expanded
-      - name: Build Android test APK
-        script: flutter build apk --debug
+      - name: Build Android prototype APK
+        script: flutter build apk --release --build-number="${BUILD_NUMBER:-2}"
       - name: Resolve iOS dependencies
         script: |
           cd ios
@@ -33,7 +33,7 @@ workflows:
           flutter build ios --release --no-codesign
           ditto -c -k --sequesterRsrc --keepParent build/ios/iphoneos/Runner.app build/ios/iphoneos/VisionCane-unsigned.zip
     artifacts:
-      - build/app/outputs/flutter-apk/app-debug.apk
+      - build/app/outputs/flutter-apk/app-release.apk
       - pubspec.lock
       - ios/Podfile.lock
       - build/ios/iphoneos/VisionCane-unsigned.zip
