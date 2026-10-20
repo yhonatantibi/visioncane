@@ -11,6 +11,13 @@ export function patchManifest(text) {
   if (!text.includes('android.hardware.camera')) {
     text = text.replace(/<application\b/, '<uses-feature android:name="android.hardware.camera" android:required="false" />\n    <application');
   }
+  if (!text.includes('android.intent.action.TTS_SERVICE')) {
+    if (text.includes('</queries>')) {
+      text = text.replace('</queries>', '<intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>\n    </queries>');
+    } else {
+      text = text.replace('</manifest>', '<queries><intent><action android:name="android.intent.action.TTS_SERVICE" /></intent></queries>\n</manifest>');
+    }
+  }
   return text.replace(/android:label="[^"]*"/, 'android:label="VisionCane"');
 }
 

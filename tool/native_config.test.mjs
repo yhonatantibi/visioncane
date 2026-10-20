@@ -10,6 +10,7 @@ test('release manifest gets camera and download permission once', () => {
   assert.equal(result.match(/android.permission.INTERNET/g).length, 1);
   assert.match(result, /android:label="VisionCane"/);
   assert.doesNotMatch(result, /RECORD_AUDIO|ACCESS_FINE_LOCATION|usesCleartextTraffic/);
+  assert.equal(result.match(/android.intent.action.TTS_SERVICE/g).length, 1);
 });
 
 test('native Android minimum and target versions are configured idempotently', () => {
@@ -50,4 +51,13 @@ test('CocoaPods enables only camera permission and preserves inherited flags', (
   assert.match(podfile, /PERMISSION_CAMERA=1/);
   assert.match(podfile, /\$\(inherited\)/);
   assert.doesNotMatch(podfile, /PERMISSION_MICROPHONE=1/);
+});
+
+test('TTS service is added within an existing queries block without a duplicate', () => {
+  const initial = '<manifest><application android:label="App"/><queries><intent><action android:name="android.intent.action.PROCESS_TEXT"/></intent></queries></manifest>';
+  const result = patchManifest(initial);
+  assert.equal(result.match(/<queries>/g).length, 1);
+  assert.equal(result.match(/android.intent.action.TTS_SERVICE/g).length, 1);
+  assert.equal(result.match(/android.intent.action.PROCESS_TEXT/g).length, 1);
+  assert.equal(patchManifest(result), result);
 });
