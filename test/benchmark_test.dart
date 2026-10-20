@@ -86,4 +86,28 @@ void main() {
     expect(percentile([12], 0.95), 12);
     expect(percentile([], 0.5), isNull);
   });
+
+  test('short report excludes raw samples without dropping performance summary', () {
+    final run = createRun();
+    add(run, 6000, 70);
+    run.finish(65000);
+    final summary = report(run);
+    expect(summary.containsKey('samples'), false);
+    expect(summary['raw_samples_included'], false);
+    expect(summary['sdk_processing_ms_p50'], 70);
+    final full = run.report(platform: 'android', deviceLabel: 'SM-X510',
+        requestedGpu: true, includeSamples: true);
+    expect(full['samples'], hasLength(1));
+  });
+
+  test('report identifies experimental depth and the settings used in that run', () {
+    final run = BenchmarkRun(startedAt: DateTime.utc(2026, 10, 20),
+      model: 'depth-test-model', mode: 'depth_experiment',
+      confidenceThreshold: 0.55, speechEnabled: false);
+    final data = report(run);
+    expect(data['model'], 'depth-test-model');
+    expect(data['mode'], 'depth_experiment');
+    expect(data['confidence_threshold'], 0.55);
+    expect(data['speech_enabled_during_run'], false);
+  });
 }
