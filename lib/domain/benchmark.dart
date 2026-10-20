@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'prototype.dart';
+
 /// These are SDK processing samples, NOT capture-to-alert measurements.
 class PerformanceSample {
   const PerformanceSample({
@@ -22,11 +24,19 @@ class PerformanceSample {
 class BenchmarkRun {
   BenchmarkRun({
     required this.startedAt,
+    this.model = 'yolo26n',
+    this.mode = 'detect',
+    this.confidenceThreshold = 0.4,
+    this.speechEnabled = false,
     this.warmupMs = 5000,
     this.measurementMs = 60000,
   });
 
   final DateTime startedAt;
+  final String model;
+  final String mode;
+  final double confidenceThreshold;
+  final bool speechEnabled;
   final int warmupMs;
   final int measurementMs;
   final List<PerformanceSample> _samples = [];
@@ -84,20 +94,23 @@ class BenchmarkRun {
     required String platform,
     required String deviceLabel,
     required bool requestedGpu,
+    bool includeSamples = false,
   }) {
     final processing = _samples.map((s) => s.processingMs).toList()..sort();
     final fps = _samples.map((s) => s.reportedFps).toList()..sort();
     return {
-      'schema_version': 1,
-      'app_version': '0.1.0',
-      'model': 'yolo26n',
+      'schema_version': 2,
+      'app_version': prototypeVersion,
+      'model': model,
+      'mode': mode,
+      'speech_enabled_during_run': speechEnabled,
       'plugin': 'ultralytics_yolo 0.6.16',
       'platform': platform,
       'device_label_user_supplied': deviceLabel.trim(),
       'requested_android_gpu': platform == 'android' ? requestedGpu : null,
       'actual_accelerator': 'not_verified_check_native_device_logs',
       'camera_resolution_requested': '720p',
-      'confidence_threshold': 0.4,
+      'confidence_threshold': confidenceThreshold,
       'started_at': startedAt.toUtc().toIso8601String(),
       'warmup_ms': warmupMs,
       'planned_measurement_ms': measurementMs,
@@ -118,7 +131,8 @@ class BenchmarkRun {
       'frame_drop_count': null,
       'accuracy_measured': false,
       'thermal_and_battery_measured': false,
-      'samples': _samples.map((s) => s.toJson()).toList(),
+      'raw_samples_included': includeSamples,
+      if (includeSamples) 'samples': _samples.map((s) => s.toJson()).toList(),
     };
   }
 }
