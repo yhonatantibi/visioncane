@@ -91,7 +91,7 @@ class LocalSpeech {
     if (!_ready) throw StateError('הקול אינו מוכן');
     final epoch = _epoch;
     try {
-      final result = await _tts.speak(text).timeout(const Duration(seconds: 20));
+      final result = await _tts.speak(text).timeout(const Duration(seconds: 45));
       if (epoch == _epoch && result != 1) throw StateError('מנוע ההקראה לא השלים את המשפט');
     } catch (error) {
       if (epoch != _epoch) return;

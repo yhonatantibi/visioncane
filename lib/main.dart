@@ -11,7 +11,9 @@ import 'package:ultralytics_yolo/ultralytics_yolo.dart';
 import 'domain/benchmark.dart';
 import 'domain/labels.dart';
 import 'domain/prototype.dart';
+import 'domain/spatial_scene.dart';
 import 'services/local_speech.dart';
+import 'services/spatial_perception.dart';
 import 'services/report_export.dart';
 import 'screens/field_trials_screen.dart';
 
@@ -54,6 +56,16 @@ class _DetectionScreenState extends State<DetectionScreen>
   final _deviceLabel = TextEditingController();
   final _speech = LocalSpeech();
   final _announcements = AnnouncementPolicy();
+  final _spatial = SpatialPerception();
+  bool _integrated = true;
+  bool _spatialPreparing = false;
+  SpatialScene? _spatialScene;
+  int _spatialFrameId = 0, _lastSpatialStartMs = -1000;
+  String? _spatialError;
+  Set<String> _previousSpatialKeys = {}, _stableSpatialKeys = {};
+  final Map<String, int> _spatialSpokenAt = {};
+  int _lastSpatialSpeechMs = -5000;
+  bool get _freshSpatial => _spatialScene?.freshAt(_clock.elapsedMilliseconds) == true;
   YOLOViewController? _viewController;
   bool _depthMode = false;
   bool _demoMode = true;
@@ -158,6 +170,7 @@ class _DetectionScreenState extends State<DetectionScreen>
     _ticker?.cancel();
     _deviceLabel.dispose();
     unawaited(_speech.stop().catchError((Object _) {}));
+    unawaited(_spatial.dispose().catchError((Object _) {}));
     _clock.stop();
     super.dispose();
   }
@@ -194,8 +207,13 @@ class _DetectionScreenState extends State<DetectionScreen>
         _processingMs = null;
         _cameraStartedMs = _clock.elapsedMilliseconds;
         _staleNotified = false;
+        _spatialScene = null;
+        _spatialError = null;
+        _previousSpatialKeys.clear(); _stableSpatialKeys.clear(); _spatialSpokenAt.clear();
+        _lastSpatialStartMs = -1000;
       });
       _event('camera_start:$_modelId');
+      if (_integrated && !_depthMode && !_spatial.prepared) unawaited(_prepareSpatial());
     } catch (error) {
       if (mounted) setState(() { _error = 'לא ניתן לפתוח את המצלמה: $error'; });
     } finally {
@@ -220,6 +238,8 @@ class _DetectionScreenState extends State<DetectionScreen>
       _lastMetricsMs = null;
       _fps = null;
       _processingMs = null;
+      _spatialScene = null;
+      _previousSpatialKeys.clear(); _stableSpatialKeys.clear();
     });
   }
 
@@ -261,7 +281,7 @@ class _DetectionScreenState extends State<DetectionScreen>
     if (!_camera || !_ready || !_fresh || _measuring) return;
     setState(() {
       _run = BenchmarkRun(startedAt: DateTime.now(), model: _modelId,
-          mode: _depthMode ? 'depth_experiment' : 'detect',
+          mode: _depthMode ? 'depth_experiment' : _integrated ? 'integrated_scene' : 'detect',
           confidenceThreshold: _threshold, speechEnabled: _voiceEnabled);
       _runStartedMs = _clock.elapsedMilliseconds;
       _runDeviceLabel = _deviceLabel.text;
@@ -338,6 +358,7 @@ class _DetectionScreenState extends State<DetectionScreen>
   void _maybeAnnounce() {
     if (!_camera || !_fresh || !_nativeConfigured || _depthMode ||
         !_voiceEnabled || !_automaticSpeech || _speaking || !_foreground) return;
+    if (_integrated) { _maybeSpatialAnnounce(); return; }
     final item = _announcements.next(_clock.elapsedMilliseconds);
     if (item == null) return;
     _announcements.markSpoken(item, _clock.elapsedMilliseconds);
@@ -374,6 +395,10 @@ class _DetectionScreenState extends State<DetectionScreen>
 
   void _describeNow() {
     if (!_camera || !_fresh || !_nativeConfigured || !_voiceEnabled || _speaking || _depthMode) return;
+    if (_integrated) {
+      if (_freshSpatial) unawaited(_speakSpatial(_spatialScene!.describe()));
+      return;
+    }
     final unique = <String, SceneItem>{};
     for (final item in _sceneItems) {
       if (item.valid && item.confidence >= AnnouncementPolicy.minimumConfidence) unique[item.key] = item;
@@ -390,7 +415,7 @@ class _DetectionScreenState extends State<DetectionScreen>
     if (_measuring || _requesting || _voicePreparing || _openingTrials) return;
     setState(() { _openingTrials = true; });
     try {
-    final mode = _depthMode ? 'depth_experiment' : 'detect';
+    final mode = _depthMode ? 'depth_experiment' : _integrated ? 'integrated_scene' : 'detect';
     final model = _modelId;
     final voice = _voiceEnabled;
     if (_camera) _stopCamera('field_trial_form_opened');
@@ -416,7 +441,7 @@ class _DetectionScreenState extends State<DetectionScreen>
         _clock.elapsedMilliseconds - _cameraStartedMs! > 30000;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('VisionCane • 0.4'),
+        title: const Text('VisionCane • 0.5'),
         actions: [
           IconButton(
             tooltip: 'מידע על הניסוי',
@@ -645,16 +670,96 @@ class _DetectionScreenState extends State<DetectionScreen>
     );
   }
 
+  Future<void> _prepareSpatial() async {
+    if (_spatialPreparing) return;
+    setState(() { _spatialPreparing = true; _spatialError = null; });
+    try {
+      await _spatial.prepare(useGpu: _gpu);
+      if (mounted && _spatial.setupIssues.isNotEmpty) {
+        setState(() { _spatialError = _spatial.setupIssues.join('\n'); });
+      }
+    } catch (error) {
+      if (mounted) setState(() { _spatialError = 'הכנת תיאור המרחב נכשלה: $error'; });
+    } finally {
+      if (mounted) setState(() { _spatialPreparing = false; });
+    }
+  }
+
+  void _onSpatialFrame(Map<String, dynamic> data, int generation) {
+    if (!mounted || !_camera || generation != _generation || !_integrated || _depthMode ||
+        !_spatial.prepared || !_foreground) return;
+    final now = _clock.elapsedMilliseconds;
+    if (now - _lastSpatialStartMs < 1000) return;
+    _lastSpatialStartMs = now;
+    final jpeg = data['originalImage'];
+    if (jpeg is! Uint8List || jpeg.isEmpty || data['detections'] is! List<Object?>) {
+      _spatialError = 'זרם המצלמה אינו מספק תמונה וזיהויים תואמים. אין אומדן מרחק משויך.';
+      return;
+    }
+    try {
+      // Do not use _results: it may belong to a different camera frame.
+      final detections = YOLODetectionResults.fromMap(data).detections;
+      unawaited(_analyseSpatial(jpeg, detections, ++_spatialFrameId, now, generation));
+    } catch (error) { _spatialError = 'פענוח תמונה משולבת נכשל: $error'; }
+  }
+
+  Future<void> _analyseSpatial(Uint8List jpeg, List<YOLOResult> detections,
+      int id, int received, int generation) async {
+    try {
+      final scene = await _spatial.analyse(jpeg: jpeg, detections: detections,
+        frameId: id, receivedAtMs: received, now: () => _clock.elapsedMilliseconds);
+      if (scene == null || !mounted || !_camera || !_foreground || generation != _generation) return;
+      if (!scene.freshAt(_clock.elapsedMilliseconds)) {
+        setState(() { _spatialError = 'ניתוח המרחב מתארך. לא נקריא מרחק או מיקום מתמונה ישנה.'; });
+        return;
+      }
+      final keys = scene.features.map((f) => f.key).toSet();
+      _stableSpatialKeys = keys.intersection(_previousSpatialKeys);
+      _previousSpatialKeys = keys;
+      setState(() {
+        _spatialScene = scene;
+        _spatialError = scene.issues.isEmpty ? null : scene.issues.join('\n');
+      });
+    } catch (error) {
+      if (mounted && generation == _generation) setState(() { _spatialError = 'ניתוח המרחב נכשל: $error'; });
+    }
+  }
+
+  void _maybeSpatialAnnounce() {
+    if (!_freshSpatial || _clock.elapsedMilliseconds - _lastSpatialSpeechMs < 5000) return;
+    final now = _clock.elapsedMilliseconds;
+    _spatialSpokenAt.removeWhere((_, at) => now - at > 60000);
+    for (final feature in _spatialScene!.ordered) {
+      if (!_stableSpatialKeys.contains(feature.key) ||
+          now - (_spatialSpokenAt[feature.key] ?? -12000) < 12000) continue;
+      _spatialSpokenAt[feature.key] = now;
+      _lastSpatialSpeechMs = now;
+      unawaited(_speakSpatial(feature.phrase));
+      return;
+    }
+  }
+
+  Future<void> _speakSpatial(String text) async {
+    final generation = _generation;
+    await _speak(text);
+    if (mounted && generation == _generation) _lastSpatialSpeechMs = _clock.elapsedMilliseconds;
+  }
+
   Widget _yoloView(int generation) => ExcludeSemantics(child: YOLOView(
     key: ValueKey(generation), modelPath: _modelId,
     task: _depthMode ? YOLOTask.depth : YOLOTask.detect,
     controller: _viewController, cameraResolution: '720p',
     confidenceThreshold: _threshold, useGpu: _gpu,
-    streamingConfig: const YOLOStreamingConfig(
+    streamingConfig: _integrated && !_depthMode ? const YOLOStreamingConfig(
+      includeOriginalImage: true, includeClassifications: false,
+      includeMasks: false, includePoses: false, includeOBB: false,
+      maxFPS: 4, inferenceFrequency: 10,
+    ) : const YOLOStreamingConfig(
       includeOriginalImage: false, includeClassifications: false,
       includeMasks: false, includePoses: false, includeOBB: false,
     ),
     onResult: (results) => _onResults(results, generation),
+    onStreamingData: (data) => _onSpatialFrame(data, generation),
     onPerformanceMetrics: (metrics) => _onMetrics(metrics, generation),
     onModelLoad: (path, task) => unawaited(_configureView(generation)),
     onModelError: (error, path, task) {
@@ -683,6 +788,10 @@ class _DetectionScreenState extends State<DetectionScreen>
         const SizedBox(height: 16),
         Semantics(liveRegion: true, child: Text(_status,
           style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600))),
+        if (_integrated && _camera) Text(_spatialPreparing
+          ? 'מכין מודלי מרחק ומבנה. בפעם הראשונה יורדים שני מודלים נוספים.'
+          : _freshSpatial ? 'תיאור משולב מתמונה משותפת: עצמים, מרחק משוער ומבנה.'
+          : 'ממתין לתיאור מרחב עדכני. עדיין אין מרחק משויך.'),
         const SizedBox(height: 12),
         // Primary controls precede the camera and remain early in TalkBack order.
         FilledButton.icon(
@@ -709,7 +818,7 @@ class _DetectionScreenState extends State<DetectionScreen>
         const SizedBox(height: 10),
         OutlinedButton.icon(
           style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(60)),
-          onPressed: _voiceEnabled && !_speaking && _fresh && _nativeConfigured ? _describeNow : null,
+          onPressed: _voiceEnabled && !_speaking && _fresh && _nativeConfigured && (!_integrated || _freshSpatial) ? _describeNow : null,
           icon: const Icon(Icons.record_voice_over_outlined),
           label: const Text('תאר עכשיו', style: TextStyle(fontSize: 20)),
         ),
@@ -721,6 +830,14 @@ class _DetectionScreenState extends State<DetectionScreen>
           Semantics(liveRegion: true, child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
           TextButton(onPressed: () async { await openAppSettings(); }, child: const Text('פתיחת הגדרות האפליקציה')),
         ],
+        if (_spatialError != null && _integrated) Text(_spatialError!,
+          style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        SwitchListTile.adaptive(contentPadding: EdgeInsets.zero,
+          title: const Text('עצמים, מרחק ומבנה ביחד'),
+          subtitle: const Text('שינוי כשהמצלמה כבויה. דורש יותר עיבוד ושני מודלים נוספים.'),
+          value: _integrated,
+          onChanged: _camera || _requesting || _spatialPreparing ? null
+            : (v) => setState(() { _integrated = v; _spatialScene = null; })),
         SwitchListTile.adaptive(contentPadding: EdgeInsets.zero,
           title: const Text('תיאור אוטומטי'),
           subtitle: const Text('אפשר לכבות ולהשתמש רק ב״תאר עכשיו״, גם לצד קורא מסך.'),
@@ -752,13 +869,27 @@ class _DetectionScreenState extends State<DetectionScreen>
           ),
         )),
         const SizedBox(height: 16),
-        Semantics(header: true, child: const Text('עצמים בתמונה',
+        Semantics(header: true, child: Text(_integrated ? 'עצמים ומבנה בתמונה' : 'עצמים בתמונה',
           style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold))),
         const Text('שמאל וימין מתייחסים לתמונת המצלמה האחורית, ולא לכיוון הגוף.'),
-        if (items.isEmpty) Padding(padding: const EdgeInsets.symmetric(vertical: 12),
+        if (_integrated) ...[
+          const Text('המרחק הוא אומדן מודל לא מכויל. דלת אינה בהכרח יציאה; רצפה אינה אישור למעבר פנוי.'),
+          if (!_freshSpatial) const Padding(padding: EdgeInsets.symmetric(vertical: 12),
+            child: Text('אין תיאור משולב עדכני. לא מוצגים מרחקים מתמונה קודמת.')),
+          if (_freshSpatial && _spatialScene!.features.isEmpty)
+            const Text('אין פרטים ברורים מספיק. אין בכך אישור שהדרך פנויה.'),
+          if (_freshSpatial) for (final feature in _spatialScene!.ordered) ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(feature.structure ? Icons.meeting_room_outlined : Icons.crop_free),
+            title: Text(feature.spokenLabel, style: const TextStyle(fontSize: 22)),
+            subtitle: Text('${feature.box.position}\n${feature.depth?.speech ?? 'המרחק אינו זמין'}',
+              style: const TextStyle(fontSize: 18))),
+          const Text('״תאר עכשיו״ מקריא עד ארבעה פרטים, כולל מבנה כשזוהה. הרשימה מציגה את כל הפרטים מהניתוח.'),
+        ],
+        if (!_integrated && items.isEmpty) Padding(padding: const EdgeInsets.symmetric(vertical: 12),
           child: Text(!_camera ? 'הפעל זיהוי כדי להתחיל.' : !_fresh || !_nativeConfigured
             ? 'ממתין לתוצאות עדכניות.' : 'אין זיהויים בביטחון גבוה. אין בכך אישור שהדרך פנויה.')),
-        for (final item in items.values.take(4)) ListTile(contentPadding: EdgeInsets.zero,
+        if (!_integrated) for (final item in items.values.take(4)) ListTile(contentPadding: EdgeInsets.zero,
           title: Text(displayLabel(item.label), style: const TextStyle(fontSize: 22)),
           subtitle: Text(sectorText(item.sector), style: const TextStyle(fontSize: 18))),
         ExpansionTile(title: const Text('הכנה, קול ועזרה'), children: [
@@ -793,6 +924,10 @@ class _DetectionScreenState extends State<DetectionScreen>
       'gpu_actual': 'not_verified', 'sdk_fps': _fps,
       'sdk_processing_ms': _processingMs, 'camera_error': _error,
       'speech': _speech.diagnostics, 'events': _events,
+      'integrated_scene': _integrated, 'spatial': _spatial.diagnostics,
+      'spatial_frame_id': _spatialScene?.frameId, 'spatial_error': _spatialError,
+      'spatial_received_to_completed_ms': _spatialScene == null ? null
+        : _spatialScene!.completedAtMs - _spatialScene!.receivedAtMs,
     });
     await showDialog<void>(context: context, builder: (context) => AlertDialog(
       title: const Text('אבחון המערכת'),
@@ -880,7 +1015,8 @@ class _DetectionScreenState extends State<DetectionScreen>
     showDialog<void>(context: context, builder: (context) => AlertDialog(
       title: const Text('על הניסוי'),
       content: const SingleChildScrollView(child: Text(
-        'גרסה 0.4.0. זיהוי עצמים עם YOLO26n, הקראה בעברית, מצב עומק ניסיוני ורישום בדיקות ידני. באייפון המודלים רצים דרך Core ML ובאנדרואיד דרך LiteRT.\n\n'
+        'גרסה 0.5.0. זיהוי עצמים, אומדן מרחק ומבנה מתמונה משותפת, והקראה בעברית. באייפון המודלים רצים דרך Core ML ובאנדרואיד דרך LiteRT.\n\n'
+        'מרחק הוא אומדן של המודל ולא מדידת חיישן מכוילת. דלת אינה הוכחה ליציאה או מעבר פנוי.\n\n'
         'בהפעלה הראשונה קובץ המודל יורד מהאינטרנט ונשמר במכשיר. אחר כך יש לבדוק פעולה במצב טיסה.\n\n'
         'קוד הניסוי אינו שומר או מעלה תמונות ואינו מבקש מיקרופון או מיקום. תוצאות בדיקה שהזנת נשמרות מקומית. העתקת דוח היא פעולה ידנית.\n\n'
         'המודל מזהה קטגוריות מוכרות. ענפים, בורות, מדרגות וסכנות אחרות אינם מובטחים. ציון ביטחון אינו אחוז הצלחה שנמדד בניסוי.')),

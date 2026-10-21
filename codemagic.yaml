@@ -2,7 +2,7 @@
 # It needs no Apple signing credentials. Its unsigned iOS output is NOT installable.
 workflows:
   android-demo:
-    name: VisionCane 0.4 - Android demo (Debug)
+    name: VisionCane 0.5 - Integrated scene demo (Debug)
     instance_type: mac_mini_m2
     max_build_duration: 45
     environment:
@@ -26,10 +26,11 @@ workflows:
         script: |
           set -e
           dart tool/domain_smoke.dart
+          dart tool/spatial_smoke.dart
           flutter analyze
           flutter test --reporter expanded
       - name: Build installable Android demo
-        script: flutter build apk --debug --build-number="${BUILD_NUMBER:-4}"
+        script: flutter build apk --debug --build-number="${BUILD_NUMBER:-5}"
     artifacts:
       - build/app/outputs/flutter-apk/app-debug.apk
       - pubspec.lock
@@ -56,8 +57,8 @@ workflows:
       - name: Build Android Debug and Release for comparison
         script: |
           set -e
-          flutter build apk --debug --build-number="${BUILD_NUMBER:-4}"
-          flutter build apk --release --build-number="${BUILD_NUMBER:-4}"
+          flutter build apk --debug --build-number="${BUILD_NUMBER:-5}"
+          flutter build apk --release --build-number="${BUILD_NUMBER:-5}"
       - name: Resolve iOS dependencies
         script: |
           cd ios

@@ -27,7 +27,7 @@ class FieldTrial {
     required this.model, required this.threshold, required this.speechEnabled,
     this.distanceMeters, this.appVersion = prototypeVersion}) {
     if (device.trim().isEmpty || !trialScenarios.containsKey(scenario) ||
-        !const ['detect', 'depth_experiment'].contains(mode) ||
+        !const ['detect', 'depth_experiment', 'integrated_scene'].contains(mode) ||
         !threshold.isFinite || threshold < 0 || threshold > 1 ||
         (distanceMeters != null && (!distanceMeters!.isFinite || distanceMeters! <= 0))) {
       throw ArgumentError('Invalid field trial');
