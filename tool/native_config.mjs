@@ -23,7 +23,7 @@ export function patchManifest(text) {
 
 export function patchGradle(text) {
   return text
-    .replace(/minSdk\s*=\s*[^\r\n]+/, 'minSdk = maxOf(flutter.minSdkVersion, 23)')
+    .replace(/minSdk\s*=\s*[^\r\n]+/, 'minSdk = maxOf(flutter.minSdkVersion, 24)')
     .replace(/compileSdk\s*=\s*[^\r\n]+/, 'compileSdk = maxOf(flutter.compileSdkVersion, 36)')
     .replace(/targetSdk\s*=\s*[^\r\n]+/, 'targetSdk = maxOf(flutter.targetSdkVersion, 36)');
 }

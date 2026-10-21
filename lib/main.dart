@@ -12,6 +12,8 @@ import 'domain/benchmark.dart';
 import 'domain/labels.dart';
 import 'domain/prototype.dart';
 import 'services/local_speech.dart';
+import 'services/report_export.dart';
+import 'screens/field_trials_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,10 +56,15 @@ class _DetectionScreenState extends State<DetectionScreen>
   final _announcements = AnnouncementPolicy();
   YOLOViewController? _viewController;
   bool _depthMode = false;
+  bool _demoMode = true;
+  bool _automaticSpeech = true;
+  double _speechRate = 0.45;
+  final List<String> _events = [];
   double _threshold = 0.4;
   bool _nativeConfigured = false;
   bool _voiceEnabled = false;
   bool _voicePreparing = false;
+  bool _openingTrials = false;
   bool _speaking = false;
   int _utterance = 0;
   String? _voiceError;
@@ -72,6 +79,7 @@ class _DetectionScreenState extends State<DetectionScreen>
   int? _lastResultMs;
   int? _lastMetricsMs;
   int? _cameraStartedMs;
+  bool _staleNotified = false;
   double? _fps;
   double? _processingMs;
   String? _error;
@@ -97,6 +105,19 @@ class _DetectionScreenState extends State<DetectionScreen>
   bool get _metricsFresh => _lastMetricsMs != null &&
       _clock.elapsedMilliseconds - _lastMetricsMs! <= 2000;
 
+  void _event(String message) {
+    _events.add('${_clock.elapsedMilliseconds}ms $message');
+    if (_events.length > 50) _events.removeAt(0);
+  }
+
+  void _stopEverything() {
+    if (_camera) _stopCamera('stop_all');
+    setState(() { _voiceEnabled = false; _speaking = false; _utterance++; });
+    _announcements.reset();
+    unawaited(_speech.stop().catchError((Object _) {}));
+    _event('stop_all');
+  }
+
   @override
   void initState() {
     super.initState();
@@ -109,6 +130,10 @@ class _DetectionScreenState extends State<DetectionScreen>
       } else if (_measuring && !_fresh) {
         _run!.finish(_runElapsed, reason: 'result_stream_stalled');
       }
+      if (_camera && _lastResultMs != null && !_fresh && !_staleNotified) {
+        _staleNotified = true;
+        unawaited(_warnStalled(_generation));
+      }
       _maybeAnnounce();
       setState(() {});
     });
@@ -116,6 +141,7 @@ class _DetectionScreenState extends State<DetectionScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _event('lifecycle:${state.name}');
     _foreground = state == AppLifecycleState.resumed;
     if (!_foreground && _camera) _stopCamera('app_backgrounded');
     if (!_foreground && !_camera) {
@@ -167,7 +193,9 @@ class _DetectionScreenState extends State<DetectionScreen>
         _fps = null;
         _processingMs = null;
         _cameraStartedMs = _clock.elapsedMilliseconds;
+        _staleNotified = false;
       });
+      _event('camera_start:$_modelId');
     } catch (error) {
       if (mounted) setState(() { _error = 'לא ניתן לפתוח את המצלמה: $error'; });
     } finally {
@@ -176,6 +204,7 @@ class _DetectionScreenState extends State<DetectionScreen>
   }
 
   void _stopCamera(String reason) {
+    _event('camera_stop:$reason');
     if (_measuring) _run!.finish(_runElapsed, reason: reason);
     _utterance++;
     _speaking = false;
@@ -198,6 +227,7 @@ class _DetectionScreenState extends State<DetectionScreen>
     if (!mounted || !_camera || generation != _generation) return;
     if (_depthMode) return; // Depth freshness is driven by processing callbacks.
     _lastResultMs = _clock.elapsedMilliseconds;
+    _staleNotified = false;
     _ready = true;
     _results = results.where((r) => r.confidence.isFinite &&
         r.confidence >= _threshold && r.confidence <= 1).toList()
@@ -240,8 +270,8 @@ class _DetectionScreenState extends State<DetectionScreen>
   }
 
   String get _status {
-    if (!_camera) return 'המצלמה כבויה';
     if (_error != null) return 'נדרשת בדיקה';
+    if (!_camera) return 'המצלמה כבויה';
     if (_fresh && !_nativeConfigured) return 'מסנכרן הגדרות תצוגה…';
     if (_fresh) return _depthMode ? 'עיבוד עומק ניסיוני פעיל' : 'זיהוי מקומי פעיל';
     if (_lastResultMs != null) return 'אין תוצאות עדכניות';
@@ -285,13 +315,19 @@ class _DetectionScreenState extends State<DetectionScreen>
       }
       return;
     }
+    final preparation = ++_utterance;
     setState(() { _voicePreparing = true; _voiceError = null; });
     try {
-      await _speech.prepare();
-      if (!mounted || !_foreground) return;
+      await _speech.prepare(rate: _speechRate);
+      if (!mounted || !_foreground || preparation != _utterance) return;
       setState(() { _voiceEnabled = true; _announcements.reset(); });
+      _event('speech_ready');
+      await _speak('הקראה בעברית מוכנה. הכיוונים מתייחסים לתמונת המצלמה.');
+    } on SpeechCancelled {
+      // Stop, backgrounding or navigation invalidated this preparation.
     } catch (error) {
-      if (mounted) setState(() { _voiceError = error.toString(); _voiceEnabled = false; });
+      _event('speech_prepare_error:$error');
+      if (mounted && preparation == _utterance) setState(() { _voiceError = error.toString(); _voiceEnabled = false; });
     } finally {
       if (mounted) setState(() { _voicePreparing = false; });
     }
@@ -301,7 +337,7 @@ class _DetectionScreenState extends State<DetectionScreen>
 
   void _maybeAnnounce() {
     if (!_camera || !_fresh || !_nativeConfigured || _depthMode ||
-        !_voiceEnabled || _speaking || !_foreground) return;
+        !_voiceEnabled || !_automaticSpeech || _speaking || !_foreground) return;
     final item = _announcements.next(_clock.elapsedMilliseconds);
     if (item == null) return;
     _announcements.markSpoken(item, _clock.elapsedMilliseconds);
@@ -319,10 +355,21 @@ class _DetectionScreenState extends State<DetectionScreen>
       if (mounted && token == _utterance) {
         _voiceError = 'ההקראה נכשלה: $error';
         _voiceEnabled = false;
+        _event('speech_error:$error');
       }
     } finally {
       if (mounted && token == _utterance) setState(() { _speaking = false; });
     }
+  }
+
+  Future<void> _warnStalled(int generation) async {
+    _event('result_stream_stalled');
+    _utterance++;
+    _speaking = false;
+    _announcements.reset();
+    await _speech.stop().catchError((Object _) {});
+    if (!mounted || !_camera || generation != _generation || _fresh || !_foreground) return;
+    if (_voiceEnabled) await _speak('הזיהוי אינו מתעדכן. עצור והפעל שוב.');
   }
 
   void _describeNow() {
@@ -339,6 +386,28 @@ class _DetectionScreenState extends State<DetectionScreen>
     unawaited(_speak(text));
   }
 
+  Future<void> _openFieldTrials() async {
+    if (_measuring || _requesting || _voicePreparing || _openingTrials) return;
+    setState(() { _openingTrials = true; });
+    try {
+    final mode = _depthMode ? 'depth_experiment' : 'detect';
+    final model = _modelId;
+    final voice = _voiceEnabled;
+    if (_camera) _stopCamera('field_trial_form_opened');
+    _voiceEnabled = false;
+    _utterance++;
+    _speaking = false;
+    await _speech.stop().catchError((Object _) {});
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(MaterialPageRoute(builder: (_) => FieldTrialsScreen(
+      device: _deviceLabel.text, mode: mode, model: model,
+      threshold: _threshold, speechEnabled: voice,
+    )));
+    } finally {
+      if (mounted) setState(() { _openingTrials = false; });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final generation = _generation;
@@ -347,7 +416,7 @@ class _DetectionScreenState extends State<DetectionScreen>
         _clock.elapsedMilliseconds - _cameraStartedMs! > 30000;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('VisionCane • 0.2'),
+        title: const Text('VisionCane • 0.4'),
         actions: [
           IconButton(
             tooltip: 'מידע על הניסוי',
@@ -356,7 +425,19 @@ class _DetectionScreenState extends State<DetectionScreen>
           ),
         ],
       ),
-      body: SafeArea(
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _demoMode ? 0 : 1,
+        onDestinationSelected: _requesting || _openingTrials ? null : (index) {
+          if ((index == 0) == _demoMode) return;
+          _stopEverything();
+          setState(() { _demoMode = index == 0; if (_demoMode) _depthMode = false; });
+        },
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.visibility_outlined), label: 'הדגמה'),
+          NavigationDestination(icon: Icon(Icons.science_outlined), label: 'כלי בדיקה'),
+        ],
+      ),
+      body: _demoMode ? _buildDemo(generation) : SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -396,30 +477,7 @@ class _DetectionScreenState extends State<DetectionScreen>
                   color: const Color(0xFF142337),
                   child: _camera
                       ? Stack(fit: StackFit.expand, children: [
-                          YOLOView(
-                            key: ValueKey(generation),
-                            modelPath: _modelId,
-                            task: _depthMode ? YOLOTask.depth : YOLOTask.detect,
-                            controller: _viewController,
-                            cameraResolution: '720p',
-                            confidenceThreshold: _threshold,
-                            useGpu: _gpu,
-                            streamingConfig: const YOLOStreamingConfig(
-                              includeOriginalImage: false,
-                              includeClassifications: false,
-                              includeMasks: false,
-                              includePoses: false,
-                              includeOBB: false,
-                            ),
-                            onResult: (results) => _onResults(results, generation),
-                            onPerformanceMetrics: (metrics) => _onMetrics(metrics, generation),
-                            onModelLoad: (path, task) => unawaited(_configureView(generation)),
-                            onModelError: (error, path, task) {
-                              if (!mounted || generation != _generation) return;
-                              _stopCamera('model_error');
-                              setState(() { _error = 'טעינת המודל נכשלה: $error'; });
-                            },
-                          ),
+                          _yoloView(generation),
                           if (!_fresh || !_nativeConfigured)
                             ColoredBox(
                               color: Colors.black54,
@@ -499,6 +557,8 @@ class _DetectionScreenState extends State<DetectionScreen>
                 onChanged: _voicePreparing || _measuring ? null : (value) => unawaited(_toggleVoice(value)),
               ),
               if (_voiceError != null) Text(_voiceError!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              TextButton.icon(onPressed: _showDiagnostics,
+                icon: const Icon(Icons.bug_report_outlined), label: const Text('אבחון והעתקת דוח')),
               Wrap(spacing: 8, children: [
                 OutlinedButton.icon(
                   onPressed: _voiceEnabled && !_speaking && !_measuring
@@ -572,12 +632,192 @@ class _DetectionScreenState extends State<DetectionScreen>
                 label: Text('פתיחת דוח • ${_run!.sampleCount} דגימות'),
               ),
             const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: _measuring || _requesting || _voicePreparing || _openingTrials ? null : _openFieldTrials,
+              icon: const Icon(Icons.fact_check_outlined),
+              label: const Text('רישום תוצאת ניסוי (עוצר מצלמה)'),
+            ),
             const Text('אב־טיפוס לבדיקה מבוקרת. אינו אמצעי להכוונת הליכה. בשלב זה אין מדידת מרחק או זיהוי של כל סוגי המכשולים.',
                 style: TextStyle(fontSize: 12, color: Colors.white70)),
           ],
         ),
       ),
     );
+  }
+
+  Widget _yoloView(int generation) => ExcludeSemantics(child: YOLOView(
+    key: ValueKey(generation), modelPath: _modelId,
+    task: _depthMode ? YOLOTask.depth : YOLOTask.detect,
+    controller: _viewController, cameraResolution: '720p',
+    confidenceThreshold: _threshold, useGpu: _gpu,
+    streamingConfig: const YOLOStreamingConfig(
+      includeOriginalImage: false, includeClassifications: false,
+      includeMasks: false, includePoses: false, includeOBB: false,
+    ),
+    onResult: (results) => _onResults(results, generation),
+    onPerformanceMetrics: (metrics) => _onMetrics(metrics, generation),
+    onModelLoad: (path, task) => unawaited(_configureView(generation)),
+    onModelError: (error, path, task) {
+      if (!mounted || generation != _generation) return;
+      _stopCamera('model_error');
+      setState(() { _error = 'טעינת המודל נכשלה: $error'; });
+    },
+  ));
+
+  Widget _buildDemo(int generation) {
+    final items = <String, SceneItem>{};
+    if (_fresh && _nativeConfigured) {
+      for (final item in _sceneItems) {
+        if (item.valid && item.confidence >= AnnouncementPolicy.minimumConfidence) {
+          items.putIfAbsent(item.key, () => item);
+        }
+      }
+    }
+    return SafeArea(child: ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Semantics(header: true, child: const Text('מה נמצא מולי?',
+          style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold))),
+        const SizedBox(height: 8),
+        const Text('הדגמת תיאור עצמים במכשיר. מתחילים בישיבה, עם מלווה. המערכת אינה מנחה הליכה ואינה קובעת שהדרך פנויה.'),
+        const SizedBox(height: 16),
+        Semantics(liveRegion: true, child: Text(_status,
+          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600))),
+        const SizedBox(height: 12),
+        // Primary controls precede the camera and remain early in TalkBack order.
+        FilledButton.icon(
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(64)),
+          onPressed: _requesting || _camera ? null : _startCamera,
+          icon: const Icon(Icons.videocam_outlined),
+          label: Text(_requesting ? 'מבקש הרשאה…' : 'הפעלת זיהוי', style: const TextStyle(fontSize: 22)),
+        ),
+        const SizedBox(height: 10),
+        FilledButton.tonalIcon(
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(64)),
+          onPressed: _camera || _voiceEnabled || _voicePreparing || _speaking ? _stopEverything : null,
+          icon: const Icon(Icons.stop_circle_outlined),
+          label: const Text('עצירת הכול', style: TextStyle(fontSize: 22)),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(60)),
+          onPressed: _voicePreparing ? null : () => unawaited(_toggleVoice(!_voiceEnabled)),
+          icon: Icon(_voiceEnabled ? Icons.volume_off_outlined : Icons.volume_up_outlined),
+          label: Text(_voicePreparing ? 'מכין קול עברי…' : _voiceEnabled ? 'כיבוי קול' : 'הפעלת קול עברי',
+            style: const TextStyle(fontSize: 20)),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(60)),
+          onPressed: _voiceEnabled && !_speaking && _fresh && _nativeConfigured ? _describeNow : null,
+          icon: const Icon(Icons.record_voice_over_outlined),
+          label: const Text('תאר עכשיו', style: TextStyle(fontSize: 20)),
+        ),
+        if (_voiceError != null) Semantics(liveRegion: true, child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Text(_voiceError!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        )),
+        if (_error != null) ...[
+          Semantics(liveRegion: true, child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
+          TextButton(onPressed: () async { await openAppSettings(); }, child: const Text('פתיחת הגדרות האפליקציה')),
+        ],
+        SwitchListTile.adaptive(contentPadding: EdgeInsets.zero,
+          title: const Text('תיאור אוטומטי'),
+          subtitle: const Text('אפשר לכבות ולהשתמש רק ב״תאר עכשיו״, גם לצד קורא מסך.'),
+          value: _automaticSpeech,
+          onChanged: (v) {
+            setState(() { _automaticSpeech = v; _announcements.reset(); });
+            if (!v) {
+              _utterance++; _speaking = false;
+              unawaited(_speech.stop().catchError((Object _) {}));
+            }
+          },
+        ),
+        if (_lastSpoken != null) Card(child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text('התיאור האחרון: $_lastSpoken', style: const TextStyle(fontSize: 22)),
+        )),
+        const SizedBox(height: 12),
+        SizedBox(height: 240, child: ClipRRect(borderRadius: BorderRadius.circular(20),
+          child: ColoredBox(color: const Color(0xFF142337), child: _camera
+            ? Stack(fit: StackFit.expand, children: [
+                _yoloView(generation),
+                if (!_fresh || !_nativeConfigured) ColoredBox(color: Colors.black54,
+                  child: Center(child: Padding(padding: const EdgeInsets.all(20),
+                    child: Text(_lastResultMs == null
+                      ? 'מכין מצלמה ומודל. בפעם הראשונה נדרש אינטרנט להורדה.'
+                      : 'אין כרגע זיהוי מעודכן. עצור ונסה שוב.', textAlign: TextAlign.center)))),
+              ])
+            : const Center(child: Icon(Icons.center_focus_strong, size: 64)),
+          ),
+        )),
+        const SizedBox(height: 16),
+        Semantics(header: true, child: const Text('עצמים בתמונה',
+          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold))),
+        const Text('שמאל וימין מתייחסים לתמונת המצלמה האחורית, ולא לכיוון הגוף.'),
+        if (items.isEmpty) Padding(padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Text(!_camera ? 'הפעל זיהוי כדי להתחיל.' : !_fresh || !_nativeConfigured
+            ? 'ממתין לתוצאות עדכניות.' : 'אין זיהויים בביטחון גבוה. אין בכך אישור שהדרך פנויה.')),
+        for (final item in items.values.take(4)) ListTile(contentPadding: EdgeInsets.zero,
+          title: Text(displayLabel(item.label), style: const TextStyle(fontSize: 22)),
+          subtitle: Text(sectorText(item.sector), style: const TextStyle(fontSize: 18))),
+        ExpansionTile(title: const Text('הכנה, קול ועזרה'), children: [
+          const Padding(padding: EdgeInsets.all(12), child: Text(
+            '1. בהפעלה הראשונה התחבר לאינטרנט והפעל זיהוי להורדת המודל.\n'
+            '2. הפעל קול עברי והקשב למשפט הבדיקה.\n'
+            '3. הפעל מצב טיסה, כבה Wi-Fi ופתח מחדש. בדוק זיהוי וקול.\n'
+            '4. הדגם כיסא, בקבוק ואדם בישיבה עם מלווה.\n'
+            'המצלמה וההקראה נעצרות ביציאה מהאפליקציה. אין שמירת תמונות בקוד האפליקציה.')),
+          Text('מהירות הקראה: ${(_speechRate * 100).round()}%'),
+          Slider(value: _speechRate, min: 0.25, max: 0.65, divisions: 8,
+            label: '${(_speechRate * 100).round()}%',
+            onChanged: _voiceEnabled || _voicePreparing ? null : (v) => setState(() { _speechRate = v; })),
+          const Text('לשינוי מהירות, כבה את הקול תחילה.'),
+          TextButton.icon(onPressed: _voiceEnabled && !_speaking
+            ? () => unawaited(_speak('בדיקת קול בעברית. המערכת מתארת עצמים בתמונה.')) : null,
+            icon: const Icon(Icons.volume_up), label: const Text('השמעת משפט בדיקה')),
+          TextButton.icon(onPressed: _showDiagnostics,
+            icon: const Icon(Icons.bug_report_outlined), label: const Text('אבחון והעתקת דוח')),
+        ]),
+        const SizedBox(height: 16),
+      ],
+    ));
+  }
+
+  Future<void> _showDiagnostics() async {
+    final report = const JsonEncoder.withIndent('  ').convert({
+      'app_version': prototypeVersion, 'platform': Platform.operatingSystem,
+      'os_version': Platform.operatingSystemVersion, 'model': _modelId,
+      'camera_running': _camera, 'fresh': _fresh,
+      'native_configured': _nativeConfigured, 'gpu_requested': _gpu,
+      'gpu_actual': 'not_verified', 'sdk_fps': _fps,
+      'sdk_processing_ms': _processingMs, 'camera_error': _error,
+      'speech': _speech.diagnostics, 'events': _events,
+    });
+    await showDialog<void>(context: context, builder: (context) => AlertDialog(
+      title: const Text('אבחון המערכת'),
+      content: SizedBox(width: 500, child: SingleChildScrollView(child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('הדוח כולל הגדרות, מצב מנוע הקול ושגיאות. אין תמונות או הקלטות.'),
+          const SizedBox(height: 12),
+          Directionality(textDirection: TextDirection.ltr, child: SelectableText(report)),
+        ],
+      ))),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('סגירה')),
+        TextButton(onPressed: () => shareReport(context, report, 'diagnostics'), child: const Text('שיתוף קובץ')),
+        FilledButton(onPressed: () async {
+          try {
+            await Clipboard.setData(ClipboardData(text: report));
+            if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('דוח האבחון הועתק')));
+          } catch (_) {
+            if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('ההעתקה נכשלה. אפשר לבחור טקסט מהדוח.')));
+          }
+        }, child: const Text('העתקת דוח')),
+      ],
+    ));
   }
 
   Future<void> _showReport() async {
@@ -628,6 +868,8 @@ class _DetectionScreenState extends State<DetectionScreen>
               },
               child: const Text('העתקת דוח מלא עם דגימות'),
             ),
+            OutlinedButton.icon(onPressed: () => shareReport(context, fullJson, 'benchmark'),
+              icon: const Icon(Icons.share_outlined), label: const Text('שיתוף דוח מלא כקובץ')),
           ]),
         ),
       )),
@@ -638,11 +880,17 @@ class _DetectionScreenState extends State<DetectionScreen>
     showDialog<void>(context: context, builder: (context) => AlertDialog(
       title: const Text('על הניסוי'),
       content: const SingleChildScrollView(child: Text(
-        'גרסה 0.2.0. זיהוי עצמים עם YOLO26n, הקראה בעברית ומצב עומק ניסיוני. באייפון המודלים רצים דרך Core ML ובאנדרואיד דרך LiteRT.\n\n'
+        'גרסה 0.4.0. זיהוי עצמים עם YOLO26n, הקראה בעברית, מצב עומק ניסיוני ורישום בדיקות ידני. באייפון המודלים רצים דרך Core ML ובאנדרואיד דרך LiteRT.\n\n'
         'בהפעלה הראשונה קובץ המודל יורד מהאינטרנט ונשמר במכשיר. אחר כך יש לבדוק פעולה במצב טיסה.\n\n'
-        'קוד הניסוי אינו שומר או מעלה תמונות ואינו מבקש מיקרופון או מיקום. העתקת דוח היא פעולה ידנית.\n\n'
+        'קוד הניסוי אינו שומר או מעלה תמונות ואינו מבקש מיקרופון או מיקום. תוצאות בדיקה שהזנת נשמרות מקומית. העתקת דוח היא פעולה ידנית.\n\n'
         'המודל מזהה קטגוריות מוכרות. ענפים, בורות, מדרגות וסכנות אחרות אינם מובטחים. ציון ביטחון אינו אחוז הצלחה שנמדד בניסוי.')),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('הבנתי'))],
+      actions: [
+        TextButton(onPressed: () {
+          Navigator.pop(context);
+          showLicensePage(context: this.context, applicationName: 'VisionCane', applicationVersion: prototypeVersion);
+        }, child: const Text('רישיונות רכיבים')),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('הבנתי')),
+      ],
     ));
   }
 }

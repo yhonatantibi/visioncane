@@ -1,12 +1,44 @@
 # Start this workflow manually after importing the repository into Codemagic.
 # It needs no Apple signing credentials. Its unsigned iOS output is NOT installable.
 workflows:
+  android-demo:
+    name: VisionCane 0.4 - Android demo (Debug)
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      flutter: 3.47.7
+    cache:
+      cache_paths:
+        - $HOME/.pub-cache
+        - $HOME/.gradle/caches
+        - $HOME/.gradle/wrapper
+    scripts:
+      - name: Check project layout and native configuration
+        script: |
+          set -e
+          node tool/check_layout.mjs
+          node --test tool/native_config.test.mjs
+      - name: Generate platform projects and resolve packages
+        script: |
+          flutter config --no-enable-swift-package-manager
+          node tool/bootstrap.mjs
+      - name: Analyze and test
+        script: |
+          set -e
+          dart tool/domain_smoke.dart
+          flutter analyze
+          flutter test --reporter expanded
+      - name: Build installable Android demo
+        script: flutter build apk --debug --build-number="${BUILD_NUMBER:-4}"
+    artifacts:
+      - build/app/outputs/flutter-apk/app-debug.apk
+      - pubspec.lock
   verify-mobile:
     name: VisionCane - verify Android and unsigned iOS
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
-      flutter: stable
+      flutter: 3.47.7
       xcode: latest
       cocoapods: default
     scripts:
@@ -21,8 +53,11 @@ workflows:
           set -e
           flutter analyze
           flutter test --reporter expanded
-      - name: Build Android prototype APK
-        script: flutter build apk --debug
+      - name: Build Android Debug and Release for comparison
+        script: |
+          set -e
+          flutter build apk --debug --build-number="${BUILD_NUMBER:-4}"
+          flutter build apk --release --build-number="${BUILD_NUMBER:-4}"
       - name: Resolve iOS dependencies
         script: |
           cd ios
@@ -34,6 +69,7 @@ workflows:
           ditto -c -k --sequesterRsrc --keepParent build/ios/iphoneos/Runner.app build/ios/iphoneos/VisionCane-unsigned.zip
     artifacts:
       - build/app/outputs/flutter-apk/app-debug.apk
+      - build/app/outputs/flutter-apk/app-release.apk
       - pubspec.lock
       - ios/Podfile.lock
       - build/ios/iphoneos/VisionCane-unsigned.zip
