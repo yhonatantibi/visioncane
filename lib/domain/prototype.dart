@@ -1,4 +1,4 @@
-const prototypeVersion = '0.5.0';
+const prototypeVersion = '0.5.1';
 
 /// Camera-image coordinates only: these are NOT body or navigation directions.
 enum ImageSector { left, center, right }

@@ -62,6 +62,7 @@ class _DetectionScreenState extends State<DetectionScreen>
   SpatialScene? _spatialScene;
   int _spatialFrameId = 0, _lastSpatialStartMs = -1000;
   String? _spatialError;
+  Map<String, Object?> _streamShape = {};
   Set<String> _previousSpatialKeys = {}, _stableSpatialKeys = {};
   final Map<String, int> _spatialSpokenAt = {};
   int _lastSpatialSpeechMs = -5000;
@@ -315,6 +316,7 @@ class _DetectionScreenState extends State<DetectionScreen>
       }
       if (!controller.isInitialized) throw StateError('ממשק המצלמה אינו מוכן');
       await controller.setConfidenceThreshold(_threshold);
+        await controller.setStreamingConfig(_cameraStreamConfig);
       if (!mounted || !_camera || generation != _generation) return;
       setState(() { _nativeConfigured = true; });
     } catch (error) {
@@ -686,6 +688,27 @@ class _DetectionScreenState extends State<DetectionScreen>
   }
 
   void _onSpatialFrame(Map<String, dynamic> data, int generation) {
+    if (!mounted || !_camera || generation != _generation || !_foreground) return;
+    _streamShape = {
+      'keys': data.keys.toList(),
+      'image_type': data['originalImage']?.runtimeType.toString(),
+      'image_bytes': data['originalImage'] is Uint8List
+          ? (data['originalImage'] as Uint8List).length : null,
+      'detections_type': data['detections']?.runtimeType.toString(),
+    };
+    // With onStreamingData installed, YOLOView does NOT invoke onResult or
+    // onPerformanceMetrics. Dispatch these before fusion readiness/throttling.
+    try {
+      if (data['detections'] is List<Object?>) {
+        _onResults(YOLODetectionResults.fromMap(data).detections, generation);
+      }
+      if (data['fps'] is num || data['processingTimeMs'] is num) {
+        _onMetrics(YOLOPerformanceMetrics.fromMap(data), generation);
+      }
+    } catch (error) {
+      _spatialError = 'פענוח נתוני המצלמה נכשל: $error';
+      return;
+    }
     if (!mounted || !_camera || generation != _generation || !_integrated || _depthMode ||
         !_spatial.prepared || !_foreground) return;
     final now = _clock.elapsedMilliseconds;
@@ -693,7 +716,9 @@ class _DetectionScreenState extends State<DetectionScreen>
     _lastSpatialStartMs = now;
     final jpeg = data['originalImage'];
     if (jpeg is! Uint8List || jpeg.isEmpty || data['detections'] is! List<Object?>) {
-      _spatialError = 'זרם המצלמה אינו מספק תמונה וזיהויים תואמים. אין אומדן מרחק משויך.';
+      _spatialError = jpeg is! Uint8List || jpeg.isEmpty
+          ? 'המצלמה מזהה עצמים אך לא העבירה תמונה לחישוב המרחק. עצור והפעל את המצלמה מחדש. אם זה חוזר, שתף דוח אבחון.'
+          : 'התמונה התקבלה ללא רשימת זיהויים תואמת. אין אומדן מרחק משויך.';
       return;
     }
     try {
@@ -750,14 +775,7 @@ class _DetectionScreenState extends State<DetectionScreen>
     task: _depthMode ? YOLOTask.depth : YOLOTask.detect,
     controller: _viewController, cameraResolution: '720p',
     confidenceThreshold: _threshold, useGpu: _gpu,
-    streamingConfig: _integrated && !_depthMode ? const YOLOStreamingConfig(
-      includeOriginalImage: true, includeClassifications: false,
-      includeMasks: false, includePoses: false, includeOBB: false,
-      maxFPS: 4, inferenceFrequency: 10,
-    ) : const YOLOStreamingConfig(
-      includeOriginalImage: false, includeClassifications: false,
-      includeMasks: false, includePoses: false, includeOBB: false,
-    ),
+    streamingConfig: _cameraStreamConfig,
     onResult: (results) => _onResults(results, generation),
     onStreamingData: (data) => _onSpatialFrame(data, generation),
     onPerformanceMetrics: (metrics) => _onMetrics(metrics, generation),
@@ -768,6 +786,15 @@ class _DetectionScreenState extends State<DetectionScreen>
       setState(() { _error = 'טעינת המודל נכשלה: $error'; });
     },
   ));
+
+  YOLOStreamingConfig get _cameraStreamConfig => _integrated && !_depthMode ? const YOLOStreamingConfig(
+      includeOriginalImage: true, includeClassifications: false,
+      includeMasks: false, includePoses: false, includeOBB: false,
+      maxFPS: 4, inferenceFrequency: 10,
+    ) : const YOLOStreamingConfig(
+      includeOriginalImage: false, includeClassifications: false,
+      includeMasks: false, includePoses: false, includeOBB: false,
+    );
 
   Widget _buildDemo(int generation) {
     final items = <String, SceneItem>{};
@@ -925,6 +952,7 @@ class _DetectionScreenState extends State<DetectionScreen>
       'sdk_processing_ms': _processingMs, 'camera_error': _error,
       'speech': _speech.diagnostics, 'events': _events,
       'integrated_scene': _integrated, 'spatial': _spatial.diagnostics,
+      'camera_stream_shape': _streamShape,
       'spatial_frame_id': _spatialScene?.frameId, 'spatial_error': _spatialError,
       'spatial_received_to_completed_ms': _spatialScene == null ? null
         : _spatialScene!.completedAtMs - _spatialScene!.receivedAtMs,
