@@ -134,11 +134,28 @@ List<SpatialFeature> extractStructures({required int width, required int height,
   if (width <= 0 || height <= 0 || width * height > 4000000 || classes.length != width * height) return [];
   final regions = <String, _Region>{};
   final kinds = [for (final label in labels) structureKind(label)];
+  final visitedDoors = <int>{};
   for (var y = 0; y < height; y++) {
     for (var x = 0; x < width; x++) {
       final index = classes[y * width + x];
       if (index < 0 || index >= kinds.length || kinds[index] == null) continue;
       final kind = kinds[index]!;
+      if (kind == 'door') {
+        final pixel = y * width + x;
+        if (!visitedDoors.add(pixel)) continue;
+        final region = _Region(kind, index);
+        regions['door:$pixel'] = region;
+        final queue = <int>[pixel];
+        for (var head = 0; head < queue.length; head++) {
+          final p = queue[head], px = p % width, py = p ~/ width;
+          region.add(px, py);
+          for (final next in [if (px > 0) p - 1, if (px + 1 < width) p + 1,
+            if (py > 0) p - width, if (py + 1 < height) p + width]) {
+            if (classes[next] == index && visitedDoors.add(next)) queue.add(next);
+          }
+        }
+        continue;
+      }
       final sector = math.min(2, x * 3 ~/ width);
       final region = regions.putIfAbsent('$index:$sector', () => _Region(kind, index));
       region.add(x, y);

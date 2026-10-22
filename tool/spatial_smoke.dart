@@ -25,6 +25,12 @@ void main() {
     labels: ['door', 'wall'], depth: depth);
   verify(structures.isNotEmpty && structures.every((f) => f.label == 'door' && f.depth?.meters == 2),
     'semantic IDs resolved from model metadata and associated with depth');
+  verify(structures.length == 1, 'one door across image sectors produces one feature');
+  final twoDoors = List.generate(900, (i) => i % 30 < 8 || i % 30 > 21 ? 0 : 1);
+  final separated = extractStructures(width: 30, height: 30,
+    classes: twoDoors, labels: ['door', 'wall']);
+  verify(separated.where((f) => f.label == 'door').length == 2,
+    'disconnected doors stay separate');
   verify(extractStructures(width: 30, height: 30, classes: List.filled(900, 150),
     labels: ['door'], depth: depth).isEmpty, 'unknown semantic IDs are not guessed');
   verify(structureKind('exit') == null && !structures.first.phrase.contains('יציאה'),

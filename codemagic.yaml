@@ -2,7 +2,7 @@
 # It needs no Apple signing credentials. Its unsigned iOS output is NOT installable.
 workflows:
   android-demo:
-    name: VisionCane 0.5 - Integrated scene demo (Debug)
+    name: VisionCane 0.6.0 - Camera and saved photo demo (Debug)
     instance_type: mac_mini_m2
     max_build_duration: 45
     environment:

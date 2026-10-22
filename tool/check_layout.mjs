@@ -8,7 +8,8 @@ const required = ['pubspec.yaml', 'lib/main.dart', 'lib/domain/benchmark.dart',
   'lib/services/field_trial_store.dart', 'lib/screens/field_trials_screen.dart',
   'test/speech_voice_test.dart', 'test/local_speech_test.dart',
   'lib/domain/spatial_scene.dart', 'lib/services/spatial_perception.dart',
-  'tool/spatial_smoke.dart', 'test/spatial_scene_test.dart'];
+  'tool/spatial_smoke.dart', 'test/spatial_scene_test.dart',
+  'lib/screens/photo_review_screen.dart', 'test/photo_review_screen_test.dart'];
 const missing = required.filter(p => !fs.existsSync(path.join(root, p)));
 const flattened = fs.readdirSync(root).filter(p => p.endsWith('.dart'));
 if (missing.length || flattened.length) {

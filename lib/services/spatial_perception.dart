@@ -15,6 +15,8 @@ class SpatialPerception {
   bool? _gpuAtLoad;
   bool _prepared = false, _busy = false, _closed = false;
   bool depthReady = false, structureReady = false;
+  String depthStatus = 'טרם נטען', structureStatus = 'טרם נטען';
+  bool get doorSupported => structureReady && _labels.any((s) => structureKind(s) == 'door');
   int processed = 0, droppedBusy = 0;
   final List<String> setupIssues = [];
   bool get prepared => _prepared;
@@ -22,6 +24,9 @@ class SpatialPerception {
   Map<String, Object?> get diagnostics => {
     'depth_model': 'yolo26n-depth', 'structure_model': 'yolo26n-sem',
     'depth_ready': depthReady, 'structure_ready': structureReady,
+    'depth_status': depthStatus, 'structure_status': structureStatus,
+    'door_category_available': doorSupported,
+    'structure_categories': _labels.where((s) => structureKind(s) != null).toList(),
     'semantic_label_count': _labels.length, 'processed_scenes': processed,
     'gpu_requested_at_load': _gpuAtLoad,
     'busy_frames_skipped': droppedBusy, 'setup_issues': setupIssues,
@@ -32,12 +37,36 @@ class SpatialPerception {
   Future<void> prepare({required bool useGpu}) => _preparing ??= _prepare(useGpu);
   Future<void> _prepare(bool useGpu) async {
     _gpuAtLoad = useGpu;
+    _prepared = true; // Object descriptions remain available during model preparation.
+    await Future.wait([_prepareDepth(useGpu), _prepareStructure(useGpu)]);
+  }
+
+  Future<void> retry({required bool useGpu}) async {
+    if (_closed || _busy) return;
+    await _preparing;
+    if (_closed || _busy) return;
+    setupIssues.clear();
+    if (!depthReady) { await _depth?.dispose(); _depth = null; }
+    if (!structureReady) { await _semantic?.dispose(); _semantic = null; }
+    _preparing = _prepare(useGpu);
+    await _preparing;
+  }
+
+  Future<void> _prepareDepth(bool useGpu) async {
+    if (depthReady || _closed) return;
+    depthStatus = 'מוריד או טוען מודל מרחק';
     try {
       _depth = YOLO(modelPath: 'yolo26n-depth', task: YOLOTask.depth,
         useGpu: useGpu, useMultiInstance: true);
       depthReady = await _depth!.loadModel();
+      depthStatus = depthReady ? 'מוכן — אומדן לא מכויל' : 'הטעינה נכשלה';
       if (!depthReady) setupIssues.add('מודל המרחק לא נטען');
-    } catch (error) { setupIssues.add('מודל המרחק: $error'); }
+    } catch (error) { depthStatus = 'הטעינה נכשלה'; setupIssues.add('מודל המרחק: $error'); }
+  }
+
+  Future<void> _prepareStructure(bool useGpu) async {
+    if (structureReady || _closed) return;
+    structureStatus = 'מוריד או טוען מודל דלתות וקירות';
     if (_closed) return;
     try {
       final metadata = await YOLO.inspectModel('yolo26n-sem');
@@ -54,9 +83,10 @@ class SpatialPerception {
       _semantic = YOLO(modelPath: 'yolo26n-sem', task: YOLOTask.semantic,
         useGpu: useGpu, useMultiInstance: true);
       structureReady = await _semantic!.loadModel();
+      structureStatus = !structureReady ? 'הטעינה נכשלה'
+          : doorSupported ? 'מוכן — כולל קטגוריית דלת' : 'מוכן, אך ללא קטגוריית דלת';
       if (!structureReady) setupIssues.add('מודל מבנה המרחב לא נטען');
-    } catch (error) { setupIssues.add('מודל מבנה המרחב: $error'); }
-    if (!_closed) _prepared = true;
+    } catch (error) { structureStatus = 'הטעינה נכשלה'; setupIssues.add('מודל מבנה המרחב: $error'); }
   }
 
   Future<SpatialScene?> analyse({required Uint8List jpeg,

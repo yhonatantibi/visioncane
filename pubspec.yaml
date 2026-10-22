@@ -1,7 +1,7 @@
 name: visioncane_app
 description: On-device camera detection and performance experiments for VisionCane.
 publish_to: none
-version: 0.5.1+6
+version: 0.6.0+8
 environment:
   sdk: '>=3.10.0 <4.0.0'
   flutter: '>=3.38.1'
@@ -15,6 +15,7 @@ dependencies:
   flutter_tts: 4.2.5
   path_provider: 2.1.6
   share_plus: 13.3.1
+  file_selector: 1.1.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

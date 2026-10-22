@@ -16,6 +16,7 @@ import 'services/local_speech.dart';
 import 'services/spatial_perception.dart';
 import 'services/report_export.dart';
 import 'screens/field_trials_screen.dart';
+import 'screens/photo_review_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -360,7 +361,7 @@ class _DetectionScreenState extends State<DetectionScreen>
   void _maybeAnnounce() {
     if (!_camera || !_fresh || !_nativeConfigured || _depthMode ||
         !_voiceEnabled || !_automaticSpeech || _speaking || !_foreground) return;
-    if (_integrated) { _maybeSpatialAnnounce(); return; }
+      if (_integrated && _freshSpatial) { _maybeSpatialAnnounce(); return; }
     final item = _announcements.next(_clock.elapsedMilliseconds);
     if (item == null) return;
     _announcements.markSpoken(item, _clock.elapsedMilliseconds);
@@ -397,8 +398,8 @@ class _DetectionScreenState extends State<DetectionScreen>
 
   void _describeNow() {
     if (!_camera || !_fresh || !_nativeConfigured || !_voiceEnabled || _speaking || _depthMode) return;
-    if (_integrated) {
-      if (_freshSpatial) unawaited(_speakSpatial(_spatialScene!.describe()));
+      if (_integrated && _freshSpatial) {
+        unawaited(_speakSpatial(_spatialScene!.describe()));
       return;
     }
     final unique = <String, SceneItem>{};
@@ -407,10 +408,11 @@ class _DetectionScreenState extends State<DetectionScreen>
       if (unique.length == 3) break;
     }
     for (final item in unique.values) _announcements.markSpoken(item, _clock.elapsedMilliseconds);
-    final text = unique.isEmpty
+      final prefix = _integrated ? 'תיאור עצמים בלבד; מרחק ומבנה אינם זמינים כרגע. ' : '';
+      final text = unique.isEmpty
         ? 'אין כרגע זיהויים בביטחון גבוה. אין בכך אישור שהדרך פנויה.'
         : unique.values.map(_phrase).join('. ');
-    unawaited(_speak(text));
+      unawaited(_speak('$prefix$text'));
   }
 
   Future<void> _openFieldTrials() async {
@@ -672,11 +674,12 @@ class _DetectionScreenState extends State<DetectionScreen>
     );
   }
 
-  Future<void> _prepareSpatial() async {
+  Future<void> _prepareSpatial({bool retry = false}) async {
     if (_spatialPreparing) return;
     setState(() { _spatialPreparing = true; _spatialError = null; });
     try {
-      await _spatial.prepare(useGpu: _gpu);
+      if (retry) { await _spatial.retry(useGpu: _gpu); }
+      else { await _spatial.prepare(useGpu: _gpu); }
       if (mounted && _spatial.setupIssues.isNotEmpty) {
         setState(() { _spatialError = _spatial.setupIssues.join('\n'); });
       }
@@ -754,14 +757,17 @@ class _DetectionScreenState extends State<DetectionScreen>
     if (!_freshSpatial || _clock.elapsedMilliseconds - _lastSpatialSpeechMs < 5000) return;
     final now = _clock.elapsedMilliseconds;
     _spatialSpokenAt.removeWhere((_, at) => now - at > 60000);
+    final selected = <SpatialFeature>[];
     for (final feature in _spatialScene!.ordered) {
       if (!_stableSpatialKeys.contains(feature.key) ||
-          now - (_spatialSpokenAt[feature.key] ?? -12000) < 12000) continue;
+          now - (_spatialSpokenAt[feature.key] ?? -30000) < 30000) continue;
       _spatialSpokenAt[feature.key] = now;
-      _lastSpatialSpeechMs = now;
-      unawaited(_speakSpatial(feature.phrase));
-      return;
+      selected.add(feature);
+      if (selected.length == 2) break;
     }
+    if (selected.isEmpty) return;
+    _lastSpatialSpeechMs = now;
+    unawaited(_speakSpatial(selected.map((f) => f.phrase).join('. ')));
   }
 
   Future<void> _speakSpatial(String text) async {
@@ -821,6 +827,14 @@ class _DetectionScreenState extends State<DetectionScreen>
           : 'ממתין לתיאור מרחב עדכני. עדיין אין מרחק משויך.'),
         const SizedBox(height: 12),
         // Primary controls precede the camera and remain early in TalkBack order.
+        OutlinedButton.icon(
+          onPressed: _camera || _spatialPreparing || _spatial.busy || _voicePreparing || _requesting ? null : () async {
+            _stopEverything();
+            await _speech.stop();
+            if (!mounted) return;
+            await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const PhotoReviewScreen()));
+          },
+          icon: const Icon(Icons.photo_outlined), label: const Text('בדיקה מתמונה שמורה')),
         FilledButton.icon(
           style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(64)),
           onPressed: _requesting || _camera ? null : _startCamera,
@@ -845,7 +859,7 @@ class _DetectionScreenState extends State<DetectionScreen>
         const SizedBox(height: 10),
         OutlinedButton.icon(
           style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(60)),
-          onPressed: _voiceEnabled && !_speaking && _fresh && _nativeConfigured && (!_integrated || _freshSpatial) ? _describeNow : null,
+          onPressed: _voiceEnabled && !_speaking && _fresh && _nativeConfigured ? _describeNow : null,
           icon: const Icon(Icons.record_voice_over_outlined),
           label: const Text('תאר עכשיו', style: TextStyle(fontSize: 20)),
         ),
@@ -859,6 +873,15 @@ class _DetectionScreenState extends State<DetectionScreen>
         ],
         if (_spatialError != null && _integrated) Text(_spatialError!,
           style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        if (_integrated) ...[
+          Text('מרחק: ${_spatial.depthStatus}'),
+          Text('דלתות וקירות: ${_spatial.structureStatus}'),
+          const Text('זיהוי העצמים הרגיל אינו כולל דלתות. דלתות דורשות את מודל מבנה המרחב. זיהוי דלת אינו אישור למעבר.'),
+          OutlinedButton.icon(
+            onPressed: _camera || _spatialPreparing ? null
+                : () => unawaited(_prepareSpatial(retry: true)),
+            icon: const Icon(Icons.refresh), label: const Text('ניסיון חוזר לטעינת מרחק ומבנה')),
+        ],
         SwitchListTile.adaptive(contentPadding: EdgeInsets.zero,
           title: const Text('עצמים, מרחק ומבנה ביחד'),
           subtitle: const Text('שינוי כשהמצלמה כבויה. דורש יותר עיבוד ושני מודלים נוספים.'),
@@ -1043,7 +1066,7 @@ class _DetectionScreenState extends State<DetectionScreen>
     showDialog<void>(context: context, builder: (context) => AlertDialog(
       title: const Text('על הניסוי'),
       content: const SingleChildScrollView(child: Text(
-        'גרסה 0.5.0. זיהוי עצמים, אומדן מרחק ומבנה מתמונה משותפת, והקראה בעברית. באייפון המודלים רצים דרך Core ML ובאנדרואיד דרך LiteRT.\n\n'
+        'גרסה 0.6.0. זיהוי עצמים, אומדן מרחק ומבנה מתמונה משותפת, והקראה בעברית. באייפון המודלים רצים דרך Core ML ובאנדרואיד דרך LiteRT.\n\n'
         'מרחק הוא אומדן של המודל ולא מדידת חיישן מכוילת. דלת אינה הוכחה ליציאה או מעבר פנוי.\n\n'
         'בהפעלה הראשונה קובץ המודל יורד מהאינטרנט ונשמר במכשיר. אחר כך יש לבדוק פעולה במצב טיסה.\n\n'
         'קוד הניסוי אינו שומר או מעלה תמונות ואינו מבקש מיקרופון או מיקום. תוצאות בדיקה שהזנת נשמרות מקומית. העתקת דוח היא פעולה ידנית.\n\n'
