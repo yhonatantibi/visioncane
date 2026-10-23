@@ -6,7 +6,7 @@ void main() {
   testWidgets('saved photo mode starts without models or camera and cannot analyse absent image', (tester) async {
     await tester.pumpWidget(const MaterialApp(home: PhotoReviewScreen()));
     expect(find.text('בחירת תמונה'), findsOneWidget);
-    expect(find.textContaining('לא נכללת בדוח'), findsOneWidget);
+    expect(find.textContaining('אינה נכללת בדוח'), findsOneWidget);
     final analyse = tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'ניתוח תמונה'));
     expect(analyse.onPressed, isNull);
     expect(find.text('הקראת התיאור'), findsNothing);
