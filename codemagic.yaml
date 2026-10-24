@@ -2,7 +2,7 @@
 # It needs no Apple signing credentials. Its unsigned iOS output is NOT installable.
 workflows:
   android-demo:
-    name: VisionCane 0.7.0 - Indoor scene prototype
+    name: VisionCane 0.10.0 - Indoor and outdoor scene prototype
     instance_type: mac_mini_m2
     max_build_duration: 90
     environment:
@@ -23,9 +23,9 @@ workflows:
           import hashlib, json, shutil, zipfile
           from pathlib import Path, PurePosixPath
           root = Path.cwd()
-          with zipfile.ZipFile('VisionCane-0.7.0-source.zip') as z:
+          with zipfile.ZipFile('VisionCane-0.10.0-source.zip') as z:
               manifest = json.loads(z.read('visioncane_app/SOURCE_MANIFEST.json'))
-              if manifest['version'] != '0.7.0': raise ValueError('Wrong source version')
+              if manifest['version'] != '0.10.0': raise ValueError('Wrong source version')
               files = manifest['sha256']
               if not 1 <= len(files) <= 500: raise ValueError('Invalid source manifest')
               verified = {}
@@ -50,7 +50,7 @@ workflows:
                   target.parent.mkdir(parents=True, exist_ok=True)
                   target.write_bytes(data)
               (root / 'SOURCE_MANIFEST.json').write_text(json.dumps(manifest, indent=2))
-          print('Restored verified VisionCane 0.7.0 source and folder layout.')
+          print('Restored verified VisionCane 0.10.0 source and folder layout.')
           PY
       - name: Check project layout and native configuration
         script: |
@@ -95,9 +95,9 @@ workflows:
           import hashlib, json, shutil, zipfile
           from pathlib import Path, PurePosixPath
           root = Path.cwd()
-          with zipfile.ZipFile('VisionCane-0.7.0-source.zip') as z:
+          with zipfile.ZipFile('VisionCane-0.10.0-source.zip') as z:
               manifest = json.loads(z.read('visioncane_app/SOURCE_MANIFEST.json'))
-              if manifest['version'] != '0.7.0': raise ValueError('Wrong source version')
+              if manifest['version'] != '0.10.0': raise ValueError('Wrong source version')
               files = manifest['sha256']
               if not 1 <= len(files) <= 500: raise ValueError('Invalid source manifest')
               verified = {}
@@ -122,7 +122,7 @@ workflows:
                   target.parent.mkdir(parents=True, exist_ok=True)
                   target.write_bytes(data)
               (root / 'SOURCE_MANIFEST.json').write_text(json.dumps(manifest, indent=2))
-          print('Restored verified VisionCane 0.7.0 source and folder layout.')
+          print('Restored verified VisionCane 0.10.0 source and folder layout.')
           PY
       - name: Check native configuration tools
         script: node --test tool/native_config.test.mjs
