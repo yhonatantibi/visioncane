@@ -16,6 +16,42 @@ workflows:
         - $CM_BUILD_DIR/.visioncane/model-export
         - $CM_BUILD_DIR/assets/models
     scripts:
+      - name: Restore verified source from ZIP
+        script: |
+          set -e
+          python3 - <<'PY'
+          import hashlib, json, shutil, zipfile
+          from pathlib import Path, PurePosixPath
+          root = Path.cwd()
+          with zipfile.ZipFile('VisionCane-0.7.0-source.zip') as z:
+              manifest = json.loads(z.read('visioncane_app/SOURCE_MANIFEST.json'))
+              if manifest['version'] != '0.7.0': raise ValueError('Wrong source version')
+              files = manifest['sha256']
+              if not 1 <= len(files) <= 500: raise ValueError('Invalid source manifest')
+              verified = {}
+              for name, checksum in files.items():
+                  path = PurePosixPath(name)
+                  if path.is_absolute() or '..' in path.parts or '\\' in name: raise ValueError('Unsafe source path')
+                  if path.parts[0] not in ['lib', 'test', 'tool', 'docs', 'assets', '.github'] and len(path.parts) != 1:
+                      raise ValueError('Unexpected source folder')
+                  if path.parts[0] in ['.git', '.visioncane']: raise ValueError('Unexpected private folder')
+                  data = z.read('visioncane_app/' + name)
+                  if hashlib.sha256(data).hexdigest() != checksum: raise ValueError('Corrupt source: ' + name)
+                  verified[name] = data
+              # Build workspace only: retain misplaced uploads in a backup, outside analysis.
+              names = {PurePosixPath(name).name for name in files}
+              for misplaced in root.glob('*.dart'):
+                  if misplaced.name not in names: raise ValueError('Unknown misplaced source: ' + misplaced.name)
+                  backup = root / '.visioncane/upload-backup' / misplaced.name
+                  backup.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.move(str(misplaced), str(backup))
+              for name, data in verified.items():
+                  target = root / name
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(data)
+              (root / 'SOURCE_MANIFEST.json').write_text(json.dumps(manifest, indent=2))
+          print('Restored verified VisionCane 0.7.0 source and folder layout.')
+          PY
       - name: Check project layout and native configuration
         script: |
           set -e
@@ -52,6 +88,42 @@ workflows:
       xcode: latest
       cocoapods: default
     scripts:
+      - name: Restore verified source from ZIP
+        script: |
+          set -e
+          python3 - <<'PY'
+          import hashlib, json, shutil, zipfile
+          from pathlib import Path, PurePosixPath
+          root = Path.cwd()
+          with zipfile.ZipFile('VisionCane-0.7.0-source.zip') as z:
+              manifest = json.loads(z.read('visioncane_app/SOURCE_MANIFEST.json'))
+              if manifest['version'] != '0.7.0': raise ValueError('Wrong source version')
+              files = manifest['sha256']
+              if not 1 <= len(files) <= 500: raise ValueError('Invalid source manifest')
+              verified = {}
+              for name, checksum in files.items():
+                  path = PurePosixPath(name)
+                  if path.is_absolute() or '..' in path.parts or '\\' in name: raise ValueError('Unsafe source path')
+                  if path.parts[0] not in ['lib', 'test', 'tool', 'docs', 'assets', '.github'] and len(path.parts) != 1:
+                      raise ValueError('Unexpected source folder')
+                  if path.parts[0] in ['.git', '.visioncane']: raise ValueError('Unexpected private folder')
+                  data = z.read('visioncane_app/' + name)
+                  if hashlib.sha256(data).hexdigest() != checksum: raise ValueError('Corrupt source: ' + name)
+                  verified[name] = data
+              # Build workspace only: retain misplaced uploads in a backup, outside analysis.
+              names = {PurePosixPath(name).name for name in files}
+              for misplaced in root.glob('*.dart'):
+                  if misplaced.name not in names: raise ValueError('Unknown misplaced source: ' + misplaced.name)
+                  backup = root / '.visioncane/upload-backup' / misplaced.name
+                  backup.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.move(str(misplaced), str(backup))
+              for name, data in verified.items():
+                  target = root / name
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(data)
+              (root / 'SOURCE_MANIFEST.json').write_text(json.dumps(manifest, indent=2))
+          print('Restored verified VisionCane 0.7.0 source and folder layout.')
+          PY
       - name: Check native configuration tools
         script: node --test tool/native_config.test.mjs
       - name: Generate matching platform projects
