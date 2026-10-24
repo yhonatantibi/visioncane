@@ -15,3 +15,8 @@ ios/Flutter/flutter_export_environment.sh
 *.mobileprovision
 .env*
 reports/
+.visioncane/
+pubspec_overrides.yaml
+assets/models/*.tflite
+assets/models/*.zip
+assets/models/model-build.json

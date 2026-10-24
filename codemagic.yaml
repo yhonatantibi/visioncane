@@ -2,9 +2,9 @@
 # It needs no Apple signing credentials. Its unsigned iOS output is NOT installable.
 workflows:
   android-demo:
-    name: VisionCane 0.6.0 - Camera and saved photo demo (Debug)
+    name: VisionCane 0.7.0 - Indoor scene prototype
     instance_type: mac_mini_m2
-    max_build_duration: 45
+    max_build_duration: 90
     environment:
       flutter: 3.47.7
     cache:
@@ -12,12 +12,17 @@ workflows:
         - $HOME/.pub-cache
         - $HOME/.gradle/caches
         - $HOME/.gradle/wrapper
+        - $HOME/.cache/uv
+        - $CM_BUILD_DIR/.visioncane/model-export
+        - $CM_BUILD_DIR/assets/models
     scripts:
       - name: Check project layout and native configuration
         script: |
           set -e
           node tool/check_layout.mjs
           node --test tool/native_config.test.mjs
+          node --test tool/prepare_plugin.test.mjs
+          python3 tool/build_indoor_model_test.py
       - name: Generate platform projects and resolve packages
         script: |
           flutter config --no-enable-swift-package-manager
@@ -27,17 +32,21 @@ workflows:
           set -e
           dart tool/domain_smoke.dart
           dart tool/spatial_smoke.dart
+          dart tool/narration_smoke.dart
           flutter analyze
           flutter test --reporter expanded
+      - name: Build and verify bundled indoor model with door category
+        script: bash tool/prepare_models.sh android
       - name: Build installable Android demo
-        script: flutter build apk --debug --build-number="${BUILD_NUMBER:-5}"
+        script: flutter build apk --debug --build-number="${BUILD_NUMBER:-10}"
     artifacts:
       - build/app/outputs/flutter-apk/app-debug.apk
       - pubspec.lock
+      - assets/models/model-build.json
   verify-mobile:
     name: VisionCane - verify Android and unsigned iOS
     instance_type: mac_mini_m2
-    max_build_duration: 60
+    max_build_duration: 120
     environment:
       flutter: 3.47.7
       xcode: latest
@@ -57,6 +66,7 @@ workflows:
       - name: Build Android Debug and Release for comparison
         script: |
           set -e
+          bash tool/prepare_models.sh both
           flutter build apk --debug --build-number="${BUILD_NUMBER:-5}"
           flutter build apk --release --build-number="${BUILD_NUMBER:-5}"
       - name: Resolve iOS dependencies
@@ -73,4 +83,5 @@ workflows:
       - build/app/outputs/flutter-apk/app-release.apk
       - pubspec.lock
       - ios/Podfile.lock
+      - assets/models/model-build.json
       - build/ios/iphoneos/VisionCane-unsigned.zip

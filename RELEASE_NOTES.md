@@ -1,3 +1,7 @@
+# Current release: 0.7.0 prototype candidate
+
+See [0.7.0 update and installation](docs/UPDATE-0.7.0.md). The indoor model is exported and verified during CI; native build and device validation are pending. Earlier status below is historical.
+
 # VisionCane 0.5.0 — תיאור מרחבי משולב
 
 נוסף ניתוח עצמים, מרחק ומבנה מאותה תמונה. ההקראה מפרטת שם, אחד מתשעה אזורי תמונה, ומרחק משוער במילים. כשהמרחק חסר או לא עקבי, לא מושמע מספר. קטגוריות מבניות מפוענחות מתוך מטא־דטה של המודל. תוצאות ישנות נדחות ויש תמונה אחת בלבד בעיבוד, בלי תור מתארך.

@@ -1,0 +1,2 @@
+# Export on Linux/macOS, not on the phone. Version pinned for repeatable builds.
+ultralytics-opencv-headless[export-litert]==8.4.184

@@ -16,7 +16,7 @@ test('release manifest gets camera and download permission once', () => {
 test('native Android minimum and target versions are configured idempotently', () => {
   const initial = 'compileSdk = flutter.compileSdkVersion\nminSdk = flutter.minSdkVersion\ntargetSdk = flutter.targetSdkVersion\n';
   const result = patchGradle(initial);
-  assert.equal(result, 'compileSdk = maxOf(flutter.compileSdkVersion, 36)\nminSdk = maxOf(flutter.minSdkVersion, 23)\ntargetSdk = maxOf(flutter.targetSdkVersion, 36)\n');
+  assert.equal(result, 'compileSdk = maxOf(flutter.compileSdkVersion, 36)\nminSdk = maxOf(flutter.minSdkVersion, 24)\ntargetSdk = maxOf(flutter.targetSdkVersion, 36)\n');
   assert.equal(patchGradle(result), result);
 });
 

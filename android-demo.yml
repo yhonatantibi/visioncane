@@ -1,0 +1,45 @@
+name: Indoor Android prototype 0.7
+on:
+  workflow_dispatch:
+  push:
+    branches: [demo-0.5.0]
+permissions:
+  contents: read
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install pinned Flutter SDK
+        run: |
+          git clone --depth 1 --branch 3.47.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Validate upload and configure project
+        run: |
+          node tool/check_layout.mjs
+          node --test tool/native_config.test.mjs
+          flutter config --no-enable-swift-package-manager
+          node tool/bootstrap.mjs
+      - name: Analyze and test
+        run: |
+          dart tool/domain_smoke.dart
+          dart tool/spatial_smoke.dart
+          flutter analyze
+          flutter test --reporter expanded
+      - name: Prepare verified indoor model
+        run: bash tool/prepare_models.sh android
+      - name: Build Android demo
+        run: flutter build apk --debug --build-number="$GITHUB_RUN_NUMBER"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VisionCane-0.7.0-android-debug
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error

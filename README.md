@@ -1,3 +1,7 @@
+# Current release: 0.7.0 prototype candidate
+
+See [0.7.0 update and installation](docs/UPDATE-0.7.0.md). The indoor model is exported and verified during CI; native build and device validation are pending. Earlier status below is historical.
+
 # VisionCane 0.5.0 — תיאור עצמים ומרחב מתמונה משותפת
 
 אפליקציית Flutter לאנדרואיד ולאייפון. גרסת ניסוי שמחברת זיהוי עצמים, אומדן עומק וסיווג מבנה המרחב, ומקריאה את התוצאה בעברית. נדרשת בנייה ובדיקת מכשיר לגרסה זו לפני שימוש בהדגמה.

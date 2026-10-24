@@ -3,6 +3,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {configureNative} from './native_config.mjs';
+import {preparePlugin} from './prepare_plugin.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 process.chdir(root);
@@ -36,5 +37,7 @@ try {
   for (const [relative, bytes] of saved) fs.writeFileSync(path.join(root, relative), bytes);
 }
 configureNative(root, process.env.APP_BUNDLE_ID);
+run(['pub', 'get']);
+preparePlugin(root);
 run(['pub', 'get']);
 console.log('Native projects configured. Run flutter analyze and flutter test next.');

@@ -5,7 +5,7 @@ workflows:
   ios-testflight:
     name: VisionCane - signed iOS beta
     instance_type: mac_mini_m2
-    max_build_duration: 60
+    max_build_duration: 120
     integrations:
       app_store_connect: visioncane_apple
     environment:
@@ -41,6 +41,8 @@ workflows:
           pod install --repo-update
           cd ..
           xcode-project use-profiles
+      - name: Prepare verified indoor Core ML model
+        script: bash tool/prepare_models.sh ios
       - name: Build signed beta
         script: |
           flutter build ipa --release \
